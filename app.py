@@ -167,7 +167,7 @@ else:
             df_data = df_data.sort_values(by="Tanggal")
             st.subheader("📋 Ringkasan Parameter Kritis Hari Ini")
             
-            last_row = df
+            last_row = df_data.iloc[-1]
 
     # --- TAB 2: DASHBOARD & SHARE LINK ---
     with tab_dash:
