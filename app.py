@@ -170,7 +170,7 @@ else:
             # Kunci kondisi data saat ini untuk disimpan ke database link share
             st.session_state["db_shared_water"][unique_id] = df_data.copy()
             
-            base_url = "http://localhost:8501"  # Nanti diganti link web asli pas udah di-onlinekan gratis
+            base_url = "https://pkr-wt.streamlit.app/"  # Nanti diganti link web asli pas udah di-onlinekan gratis
             share_url = f"{base_url}/?id={unique_id}"
             
             st.success("🎉 Link Berhasil Dibuat!")
