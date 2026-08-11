@@ -6,21 +6,39 @@ import uuid
 import io
 from github import Github
 
-# --- 1. CONFIG UTAMA WEBSITE ---
-st.set_page_config(page_title="Water Treatment Monitoring", layout="wide", page_icon="💧")
+# =========================================================
+# 1. CONFIG UTAMA WEBSITE
+# =========================================================
+st.set_page_config(page_title="WTP Multi-System Monitoring", layout="wide", page_icon="💧")
 
 # Ambil kredensial dari Streamlit Secrets
 try:
     GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
     GITHUB_REPO = st.secrets["GITHUB_REPO"]
-    FILE_PATH = "database.xlsx"
+    FILE_PATH = "database_wtp.xlsx"
 except Exception:
     st.error("❌ Token atau Nama Repo GitHub belum di-setting di Streamlit Secrets, bro!")
     st.stop()
 
-# --- FUNGSI UNTUK MEMBACA DATA DARI EXCEL GITHUB ---
-@st.cache_data(ttl=5) # Cache disegarkan setiap 5 detik agar real-time
+MASTER_COLUMNS = [
+    "ID_Data", "Teknisi", "Plant", "Modul", "Unit_Titik", "Tanggal",
+    "pH", "Conduct", "TDS", "Tot_Hardness", "M_Alkalinity", "Silica",
+    "Chloride", "Iron", "Turbidity", "O_Phosphate", "LSI", "Sulfit",
+]
+
+UNIT_OPTIONS = {
+    "BOILER": ["Deaerator", "WHB Off Gass 1", "WHB Off Gass 2", "WHB Plant 1", "WHB Plant 2"],
+    "COOLING TOWER": ["SBR", "Reject RO", "Batch Plant 1 (BP 1)", "Batch Plant 2 (BP 2)"],
+    "CHILLER": ["RO Chiller", "Chiller Tank"],
+}
+
+
+# =========================================================
+# 2. FUNGSI DATA: BACA & SIMPAN KE GITHUB
+# =========================================================
+@st.cache_data(ttl=5)
 def load_data_from_github():
+    """Ambil database master dari file Excel di GitHub."""
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO)
@@ -29,300 +47,325 @@ def load_data_from_github():
         df = pd.read_excel(io.BytesIO(data_bytes))
         return df, file_content.sha
     except Exception:
-        # Jika file belum ada di GitHub, buat dataframe kosong awal
-        df_init = pd.DataFrame(columns=[
-            "ID_Data", "Tanggal", "pH", "Conduct", "Tot_Hardness", "Cycle_Hard",
-            "P_Alkalinity", "M_Alkalinity", "Silica", "Cycle_Silika", 
-            "Chloride", "Cycle_Chloride", "Iron", "Turbidity", "O_Phosphate", "LSI"
-        ])
+        # File belum ada di GitHub -> inisialisasi struktur kosong
+        df_init = pd.DataFrame(columns=MASTER_COLUMNS)
         return df_init, None
 
-# --- FUNGSI UNTUK MENYIMPAN/PUSH DATA BALIK KE EXCEL GITHUB ---
-def save_data_to_github(df):
+
+def save_data_to_github(df: pd.DataFrame) -> bool:
+    """Push dataframe terbaru kembali ke file Excel di GitHub."""
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO)
-        
-        # Mengubah dataframe kembali menjadi file excel di memori
+
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
         excel_data = output.getvalue()
-        
-        # Cek apakah file sudah ada untuk menentukan apakah Overwrite atau Create New
+
         _, sha = load_data_from_github()
-        
         if sha:
-            repo.update_file(FILE_PATH, "Update database monitoring air via Web App", excel_data, sha)
+            repo.update_file(FILE_PATH, "Update database WTP Treatment via Web App", excel_data, sha)
         else:
-            repo.create_file(FILE_PATH, "Inisialisasi database monitoring air via Web App", excel_data)
+            repo.create_file(FILE_PATH, "Inisialisasi database master WTP via Web App", excel_data)
         return True
     except Exception as e:
         st.error(f"Gagal push ke GitHub: {e}")
         return False
 
-# Load data aktif saat ini
-df_data, _ = load_data_from_github()
 
-# Ambil ID Share jika diakses melalui link bagikan
+# =========================================================
+# 3. RENDER HELPERS (dipakai di beberapa tab)
+# =========================================================
+def render_trend_charts(df_filtered: pd.DataFrame, modul: str):
+    """Render 6 grafik tren inti + grafik tambahan spesifik modul."""
+    c_g1, c_g2 = st.columns(2)
+    with c_g1:
+        fig_ph = px.line(df_filtered, x="Tanggal", y="pH", color="Unit_Titik",
+                          title="1. Tren Perbandingan pH Air", markers=True)
+        st.plotly_chart(fig_ph, use_container_width=True)
+    with c_g2:
+        fig_cond = px.line(df_filtered, x="Tanggal", y="Conduct", color="Unit_Titik",
+                            title="2. Tren Conductivity (uS/cm)", markers=True)
+        st.plotly_chart(fig_cond, use_container_width=True)
+
+    c_g3, c_g4 = st.columns(2)
+    with c_g3:
+        fig_hard = px.line(df_filtered, x="Tanggal", y="Tot_Hardness", color="Unit_Titik",
+                            title="3. Tren Kalsium / Total Hardness (ppm)", markers=True)
+        st.plotly_chart(fig_hard, use_container_width=True)
+    with c_g4:
+        fig_malk = px.line(df_filtered, x="Tanggal", y="M_Alkalinity", color="Unit_Titik",
+                            title="4. Tren Kadar M-Alkalinity", markers=True)
+        st.plotly_chart(fig_malk, use_container_width=True)
+
+    c_g5, c_g6 = st.columns(2)
+    with c_g5:
+        fig_sil = px.line(df_filtered, x="Tanggal", y="Silica", color="Unit_Titik",
+                           title="5. Tren Kandungan Silica Pengendap (ppm)", markers=True)
+        st.plotly_chart(fig_sil, use_container_width=True)
+    with c_g6:
+        fig_chlor = px.line(df_filtered, x="Tanggal", y="Chloride", color="Unit_Titik",
+                             title="6. Tren Korosivitas Chloride", markers=True)
+        st.plotly_chart(fig_chlor, use_container_width=True)
+
+    # Grafik tambahan spesifik modul
+    st.markdown("---")
+    if modul == "COOLING TOWER":
+        fig_lsi = px.bar(df_filtered, x="Tanggal", y="LSI", color="Unit_Titik",
+                          title="7. Grafik Indeks Kejenuhan Langelier (LSI Index)", barmode="group")
+        st.plotly_chart(fig_lsi, use_container_width=True)
+    elif modul == "BOILER":
+        fig_sulf = px.line(df_filtered, x="Tanggal", y="Sulfit", color="Unit_Titik",
+                            title="7. Tren Kadar Sulfit Pengikat Oksigen (ppm)", markers=True)
+        st.plotly_chart(fig_sulf, use_container_width=True)
+
+
+# =========================================================
+# 4. LOAD DATA & ROUTING HALAMAN (SHARE LINK vs MAIN APP)
+# =========================================================
+df_data, _ = load_data_from_github()
 query_params = st.query_params
 
-# --- 2. LOGIKA HALAMAN: LINK SHARE (VIEW ONLY) ---
 if "id" in query_params:
+    # -----------------------------------------------------
+    # HALAMAN: LINK SHARE (VIEW ONLY)
+    # -----------------------------------------------------
     share_id = query_params["id"]
-    # Filter data sesuai ID unik di file excel
     df_shared = df_data[df_data["ID_Data"] == share_id]
-    
-    if not df_shared.empty:
-        st.title("💧 Shared Dashboard - Water Treatment Monitoring")
-        st.info("👀 Mode: Lihat Saja (View-Only).")
-        
-        # Tampilkan 7 grafik visualisasi utama untuk penerima link share
-        cg1, cg2 = st.columns(2)
-        with cg1:
-            fig_ph = px.line(df_data, x="Tanggal", y="pH", title="1. Grafik Fluktuasi pH Air", markers=True, color_discrete_sequence=["#1f77b4"])
+
+    if df_shared.empty:
+        st.error("❌ Link tidak valid atau data tidak ditemukan.")
+    else:
+        st.title("💧 Shared Dashboard - WTP Treatment Program")
+        info_row = df_shared.iloc[0]
+        st.info(
+            f"👀 Mode: Lihat Saja. Teknisi: {info_row['Teknisi']} | "
+            f"Lokasi: {info_row['Plant']} | Modul: {info_row['Modul']}"
+        )
+
+        df_module_plant = df_data[
+            (df_data["Modul"] == info_row["Modul"]) & (df_data["Plant"] == info_row["Plant"])
+        ]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_ph = px.line(df_module_plant, x="Tanggal", y="pH", color="Unit_Titik",
+                              title="Tren pH Air", markers=True)
             st.plotly_chart(fig_ph, use_container_width=True)
-        with cg2:
-            fig_cond = px.line(df_data, x="Tanggal", y="Conduct", title="2. Grafik Tren Conductivity", markers=True, color_discrete_sequence=["#2ca02c"])
+        with c2:
+            fig_cond = px.line(df_module_plant, x="Tanggal", y="Conduct", color="Unit_Titik",
+                                title="Tren Conductivity", markers=True)
             st.plotly_chart(fig_cond, use_container_width=True)
-            
-        cg3, cg4 = st.columns(2)
-        with cg3:
-            fig_hard = px.line(df_data, x="Tanggal", y="Tot_Hardness", title="3. Grafik Total Hardness", markers=True, color_discrete_sequence=["#9467bd"])
-            st.plotly_chart(fig_hard, use_container_width=True)
-        with cg4:
-            fig_malk = px.line(df_data, x="Tanggal", y="M_Alkalinity", title="4. Grafik M-Alkalinity", markers=True, color_discrete_sequence=["#e377c2"])
-            st.plotly_chart(fig_malk, use_container_width=True)
-            
-        cg5, cg6 = st.columns(2)
-        with cg5:
-            fig_sil = px.line(df_data, x="Tanggal", y="Silica", title="5. Tren Kandungan Silica (ppm)", markers=True, color_discrete_sequence=["#ff7f0e"])
-            st.plotly_chart(fig_sil, use_container_width=True)
-        with cg6:
-            fig_chlor = px.line(df_data, x="Tanggal", y="Chloride", title="6. Grafik Kadar Chloride", markers=True, color_discrete_sequence=["#bcbd22"])
-            st.plotly_chart(fig_chlor, use_container_width=True)
-            
-        st.markdown("---")
-        fig_lsi = px.bar(df_data, x="Tanggal", y="LSI", title="7. Indeks Kejenuhan Air (LSI Bar Chart)", color="LSI", color_continuous_scale="RdYlBu_r")
-        st.plotly_chart(fig_lsi, use_container_width=True)
-            
-        st.markdown("### 📋 Tabel Data Pemantauan Anda")
+
+        st.markdown("### 📋 Tabel Data Pemantauan")
         st.dataframe(df_shared.drop(columns=["ID_Data"], errors="ignore"), use_container_width=True)
-        
-        if st.button("⬅️ Buka Aplikasi Utama (Form Input)"):
+
+        if st.button("⬅️ Buka Aplikasi Utama"):
             st.query_params.clear()
             st.rerun()
-    else:
-        st.error("❌ Link tidak valid atau data tidak ditemukan.")
 
-# --- 3. LOGIKA HALAMAN: UTAMA (INPUT, LIVE DASHBOARD, EDIT) ---
 else:
-    st.title("💧 Water Treatment Quality Control & Monitoring System")
-    st.write("Semua data otomatis tersimpan permanen jadi file Excel di GitHub lu.")
-    
-    tab_form, tab_dash, tab_kelola = st.tabs(["📝 Form Input Lab Harian", "📊 Dashboard Analisis & Share", "⚙️ Kelola / Edit Data"])
-    
-    # --- TAB 1: FORM INPUT ---
+    # -----------------------------------------------------
+    # HALAMAN: UTAMA (INPUT, LIVE DASHBOARD, EDIT)
+    # -----------------------------------------------------
+    st.title("🏭 WTP Treatment Quality Control & Monitoring Master System")
+
+    # --- Sidebar: autentikasi & lokasi ---
+    st.sidebar.markdown("### 🧑‍💻 Autentikasi & Lokasi")
+    nama_teknisi = st.sidebar.text_input("Nama Teknisi / Surveyor (Wajib)", placeholder="Ketik nama Anda...")
+    pilihan_plant = st.sidebar.selectbox("Pilih Wilayah Kerja (Plant):", ["Plant A", "Plant B"])
+    pilihan_modul = st.sidebar.selectbox("Pilih Modul Monitoring:", ["BOILER", "COOLING TOWER", "CHILLER"])
+
+    tab_form, tab_dash, tab_kelola = st.tabs(
+        ["📝 Form Input Lab Harian", "📊 Dashboard Analisis & Share", "⚙️ Kelola / Edit Data"]
+    )
+
+    # =====================================================
+    # TAB 1: FORM INPUT UTAMA
+    # =====================================================
     with tab_form:
-        st.subheader("Form Input Parameter Air")
-        with st.form("water_form", clear_on_submit=True):
-            tgl = st.date_input("Tanggal Sampling", datetime.date.today())
+        st.subheader(f"Form Input Data Lab - {pilihan_modul} ({pilihan_plant})")
+
+        list_unit = UNIT_OPTIONS[pilihan_modul]
+
+        with st.form("master_wtp_form", clear_on_submit=True):
+            col_h1, col_h2 = st.columns(2)
+            with col_h1:
+                tgl = st.date_input("Tanggal Sampling", datetime.date.today())
+            with col_h2:
+                val_unit = st.selectbox("Pilih Titik Sampling / Unit:", list_unit)
+
             g1, g2, g3 = st.columns(3)
             with g1:
-                st.markdown("**Kondisi Fisik & Utama**")
-                val_ph = st.number_input("pH", min_value=0.0, max_value=14.0, value=7.0, step=0.01)
-                val_conduct = st.number_input("Conductivity (Conduct)", min_value=0, value=1000)
-                val_turb = st.number_input("Turbidity", min_value=0.0, value=0.0)
-                val_lsi = st.number_input("LSI", value=0.0, step=0.01)
+                st.markdown("**Parameter Utama**")
+                val_ph = st.number_input("pH Air", min_value=0.0, max_value=14.0, value=7.0, step=0.01)
+                val_conduct = st.number_input("Conductivity (uS/cm)", min_value=0, value=500)
+                val_tds = st.number_input("Total Dissolved Solid (TDS)", min_value=0, value=0)
+                val_turb = st.number_input("Turbidity (NTU)", min_value=0.0, value=0.0)
+
             with g2:
-                st.markdown("**Kandungan Kimia & Hardness**")
-                val_hard = st.number_input("Tot. Hardness", min_value=0.0, value=0.0)
-                val_cyc_hard = st.number_input("Cycle Hard", min_value=0.0, value=0.0)
-                val_p_alk = st.number_input("P-Alkalinity", min_value=0.0, value=0.0)
-                val_m_alk = st.number_input("M-Alkalinity", min_value=0.0, value=0.0)
+                st.markdown("**Kandungan Alkalinitas & Mineral**")
+                val_hard = st.number_input("Total Hardness (ppm)", min_value=0.0, value=0.0)
+                val_m_alk = st.number_input("M-Alkalinity (ppm)", min_value=0.0, value=0.0)
+                val_silica = st.number_input("Silica (ppm)", min_value=0.0, value=0.0)
+                val_chlor = st.number_input("Chloride (ppm)", min_value=0.0, value=0.0)
+
             with g3:
-                st.markdown("**Silica, Chloride & Mineral**")
-                val_silica = st.number_input("Silica", min_value=0.0, value=0.0)
-                val_cyc_sil = st.number_input("Cycle Silika", min_value=0.0, value=0.0)
-                val_chlor = st.number_input("Chloride", min_value=0.0, value=0.0)
-                val_cyc_chl = st.number_input("Cycle Chloride", min_value=0.0, value=0.0)
-                val_iron = st.number_input("Iron (Besi)", min_value=0.0, value=0.0, format="%.3f")
-                val_phos = st.number_input("O-Phosphate", min_value=0.0, value=0.0)
-                
+                st.markdown("**Parameter Khusus Logam & Gas**")
+                val_iron = st.number_input("Iron / Besi (ppm)", min_value=0.0, value=0.0, format="%.3f")
+                val_phos = st.number_input("O-Phosphate (ppm)", min_value=0.0, value=0.0)
+                val_sulfit = st.number_input("Sulfit (ppm)", min_value=0.0, value=0.0) if pilihan_modul == "BOILER" else 0.0
+                val_lsi = st.number_input("LSI Index", value=0.0, step=0.01) if pilihan_modul == "COOLING TOWER" else 0.0
+
             st.divider()
-            tombol_save = st.form_submit_button("Simpan Data Lab Permanen", type="primary")
-            
+            tombol_save = st.form_submit_button("🔒 Kunci & Simpan ke Excel GitHub", type="primary")
+
         if tombol_save:
-            with st.spinner("Sedang mengunggah dan mengunci data ke Excel GitHub..."):
-                data_baru = {
-                    "ID_Data": f"WTM-{str(uuid.uuid4())[:5].upper()}",
-                    "Tanggal": str(tgl), "pH": val_ph, "Conduct": val_conduct, "Tot_Hardness": val_hard, "Cycle_Hard": val_cyc_hard if val_cyc_hard > 0 else None,
-                    "P_Alkalinity": val_p_alk, "M_Alkalinity": val_m_alk, "Silica": val_silica, "Cycle_Silika": val_cyc_sil if val_cyc_sil > 0 else None,
-                    "Chloride": val_chlor, "Cycle_Chloride": val_cyc_chl if val_cyc_chl > 0 else None, "Iron": val_iron, "Turbidity": val_turb, 
-                    "O_Phosphate": val_phos, "LSI": val_lsi
-                }
-                df_updated = pd.concat([df_data, pd.DataFrame([data_baru])], ignore_index=True)
-                if save_data_to_github(df_updated):
-                    st.success(f"🎉 Sukses! Data tanggal {tgl} terkunci permanen di database.xlsx GitHub!")
-                    st.cache_data.clear()
-                    st.rerun()
+            if not nama_teknisi:
+                st.error(
+                    "⚠️ Gagal Simpan! Anda **wajib memasukkan Nama Teknisi** "
+                    "di menu sidebar sebelah kiri sebelum menyimpan data!"
+                )
+            else:
+                with st.spinner("Sedang mengunggah data aman ke Excel GitHub..."):
+                    data_baru = {
+                        "ID_Data": f"WTP-{str(uuid.uuid4())[:5].upper()}",
+                        "Teknisi": nama_teknisi,
+                        "Plant": pilihan_plant,
+                        "Modul": pilihan_modul,
+                        "Unit_Titik": val_unit,
+                        "Tanggal": str(tgl),
+                        "pH": val_ph,
+                        "Conduct": val_conduct,
+                        "TDS": val_tds,
+                        "Tot_Hardness": val_hard,
+                        "M_Alkalinity": val_m_alk,
+                        "Silica": val_silica,
+                        "Chloride": val_chlor,
+                        "Iron": val_iron,
+                        "Turbidity": val_turb,
+                        "O_Phosphate": val_phos,
+                        "LSI": val_lsi,
+                        "Sulfit": val_sulfit,
+                    }
+                    df_updated = pd.concat([df_data, pd.DataFrame([data_baru])], ignore_index=True)
+                    if save_data_to_github(df_updated):
+                        st.success(f"🎉 Sukses! Data lab {pilihan_modul} berhasil disimpan oleh {nama_teknisi}!")
+                        st.cache_data.clear()
+                        st.rerun()
 
-    # --- TAB 2: DASHBOARD & SHARE LINK ---
+    # =====================================================
+    # TAB 2: LIVE DASHBOARD & TREN HISTORIS
+    # =====================================================
     with tab_dash:
-        if df_data.empty:
-            st.info("Belum ada data di database.xlsx GitHub lu bro. Silakan isi form input dulu!")
+        df_filtered = df_data[(df_data["Plant"] == pilihan_plant) & (df_data["Modul"] == pilihan_modul)]
+
+        if df_filtered.empty:
+            st.info(
+                f"Belum ada histori data untuk kategori {pilihan_modul} di {pilihan_plant}. "
+                "Silakan isi form input terlebih dahulu!"
+            )
         else:
-            df_data = df_data.sort_values(by="Tanggal")
-            st.subheader("📋 Ringkasan Parameter Kritis Hari Ini")
-            
-            last_row = df_data.iloc[-1]
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("pH Terakhir", f"{last_row['pH']}")
-            k2.metric("Conductivity", f"{int(last_row['Conduct'])} µS/cm")
-            k3.metric("Silica Level", f"{last_row['Silica']} ppm")
-            k4.metric("Nilai LSI", f"{last_row['LSI']}")
-            
+            df_filtered = df_filtered.sort_values(by="Tanggal")
+
+            st.subheader(f"📊 Live Dashboard Pemantauan Tren - {pilihan_modul} ({pilihan_plant})")
+            render_trend_charts(df_filtered, pilihan_modul)
+
+            with st.expander("👀 Lihat Lembar Kerja Log Data Mentah Master"):
+                st.dataframe(df_filtered.drop(columns=["ID_Data"], errors="ignore"), use_container_width=True)
+
             st.divider()
-            st.subheader("📈 Tren Grafik Analitik")
-            
-            # --- BARIS GRAFIK 1 (pH & Conductivity) ---
-            cg1, cg2 = st.columns(2)
-            with cg1:
-                fig_ph = px.line(df_data, x="Tanggal", y="pH", title="1. Grafik Fluktuasi pH Air", markers=True, color_discrete_sequence=["#1f77b4"])
-                st.plotly_chart(fig_ph, use_container_width=True)
-            with cg2:
-                fig_cond = px.line(df_data, x="Tanggal", y="Conduct", title="2. Grafik Tren Conductivity", markers=True, color_discrete_sequence=["#2ca02c"])
-                st.plotly_chart(fig_cond, use_container_width=True)
-                
-# --- BARIS GRAFIK 2 (Total Hardness & M-Alkalinity) ---
-cg3, cg4 = st.columns(2)
-with cg3:
-    fig_hard = px.line(
-        df_data, x="Tanggal", y="Tot_Hardness",
-        title="3. Grafik Total Hardness", markers=True,
-        color_discrete_sequence=["#9467bd"]
-    )
-    st.plotly_chart(fig_hard, use_container_width=True)
+            st.subheader("🔗 Bagikan Dashboard Tren Hari Ini")
+            if st.button("Generate Link Bagikan", type="primary"):
+                last_row = df_filtered.iloc[-1]
+                unique_id = last_row["ID_Data"]
+                # TODO: ganti base_url ini dengan URL Streamlit Cloud asli begitu sudah deploy
+                base_url = "http://localhost:8501"
+                share_url = f"{base_url}/?id={unique_id}"
+                st.success("🎉 Link Berhasil Dibuat!")
+                st.code(share_url, language="text")
 
-with cg4:
-    fig_malk = px.line(
-        df_data, x="Tanggal", y="M_Alkalinity",
-        title="4. Grafik M-Alkalinity", markers=True,
-        color_discrete_sequence=["#e377c2"]
-    )
-    st.plotly_chart(fig_malk, use_container_width=True)
+    # =====================================================
+    # TAB 3: KELOLA / EDIT / HAPUS DATA
+    # =====================================================
+    with tab_kelola:
+        st.subheader("🛠️ Panel Koreksi Data Lab Master GitHub")
 
-# --- BARIS GRAFIK 3 (Silica & Chloride) ---
-cg5, cg6 = st.columns(2)
-with cg5:
-    fig_sil = px.line(
-        df_data, x="Tanggal", y="Silica",
-        title="5. Tren Kandungan Silica (ppm)", markers=True,
-        color_discrete_sequence=["#ff7f0e"]
-    )
-    st.plotly_chart(fig_sil, use_container_width=True)
-
-with cg6:
-    fig_chlor = px.line(
-        df_data, x="Tanggal", y="Chloride",
-        title="6. Grafik Kadar Chloride", markers=True,
-        color_discrete_sequence=["#bcbd22"]
-    )
-    st.plotly_chart(fig_chlor, use_container_width=True)
-
-# --- BARIS GRAFIK 4 (LSI - Indeks Kejenuhan Air) ---
-st.markdown("---")
-fig_lsi = px.bar(
-    df_data, x="Tanggal", y="LSI",
-    title="7. Indeks Kejenuhan Air (LSI Bar Chart)",
-    color="LSI", color_continuous_scale="RdYlBu_r"
-)
-st.plotly_chart(fig_lsi, use_container_width=True)
-
-# --- EXPANDER LOG LENGKAP ---
-with st.expander("👀 Lihat Lembar Kerja Log Lengkap"):
-    st.dataframe(df_data.drop(columns=["ID_Data"], errors="ignore"), use_container_width=True)
-
-st.divider()
-st.subheader("🔗 Bagikan Dashboard ini ke Orang Lain")
-if st.button("Generate Link Bagikan", type="primary"):
-    unique_id = last_row["ID_Data"]
-    base_url = "https://pkr-wt.streamlit.app/"  # ganti dengan URL Streamlit Cloud asli
-    share_url = f"{base_url}/?id={unique_id}"
-    st.success("🎉 Link Berhasil Dibuat!")
-    st.code(share_url, language="text")
-
-# --- TAB 3: FITUR KELOLA DATA (EDIT & DELETE) ---
-with tab_kelola:
-    st.subheader("🛠️ Panel Perbaikan Data Excel GitHub")
-    if df_data.empty:
-        st.info("Tidak ada data untuk diedit.")
-    else:
-        pilihan_baris = [f"{row['Tanggal']} | {row['ID_Data']}" for _, row in df_data.iterrows()]
-        data_terpilih = st.selectbox("Pilih Baris Data yang Mau Diperbaiki:", pilihan_baris)
-        selected_id = data_terpilih.split(" | ")[1]
-
-        filtered_rows = df_data[df_data["ID_Data"] == selected_id]
-        if filtered_rows.empty:
-            st.warning("Data tidak ditemukan, coba refresh halaman.")
+        if df_data.empty:
+            st.info("Tidak ada data untuk dikelola.")
         else:
-            data_lama = filtered_rows.iloc[0]
-            st.markdown("---")
-            st.write(f"🔄 Silakan Ubah Nilai untuk Data Tanggal: {data_lama['Tanggal']}")
+            pilihan_baris = [
+                f"{row['Tanggal']} | {row['Plant']} | {row['Modul']} | {row['Unit_Titik']} | {row['ID_Data']}"
+                for _, row in df_data.iterrows()
+            ]
+            data_terpilih = st.selectbox("Pilih Baris Data Lab yang Mau Diperbaiki:", pilihan_baris)
+            selected_id = data_terpilih.split(" | ")[-1]
+            filtered_rows = df_data[df_data["ID_Data"] == selected_id]
 
-            # Form edit dibagi 3 kolom
-            e1, e2, e3 = st.columns(3)
-            with e1:
-                edit_ph = st.number_input("Ubah pH", 0.0, 14.0, float(data_lama["pH"]), 0.01, key="e_ph")
-                edit_conduct = st.number_input("Ubah Conductivity", 0, int(data_lama["Conduct"]), key="e_cond")
-                edit_turb = st.number_input("Ubah Turbidity", 0.0, float(data_lama["Turbidity"]), key="e_turb")
-                edit_lsi = st.number_input("Ubah LSI", value=float(data_lama["LSI"]), step=0.01, key="e_lsi")
+            if filtered_rows.empty:
+                st.warning("Data tidak ditemukan, coba refresh halaman.")
+            else:
+                data_lama = filtered_rows.iloc[0]
+                st.markdown("---")
+                st.write(f"🔄 Silakan Ubah Nilai Koreksi untuk data milik Teknisi: {data_lama['Teknisi']}")
 
-            with e2:
-                edit_hard = st.number_input("Ubah Tot. Hardness", 0.0, float(data_lama["Tot_Hardness"]), key="e_hard")
-                edit_cyc_hard = st.number_input("Ubah Cycle Hard", 0.0, float(data_lama["Cycle_Hard"] if pd.notna(data_lama["Cycle_Hard"]) else 0.0), key="e_chard")
-                edit_p_alk = st.number_input("Ubah P-Alkalinity", 0.0, float(data_lama["P_Alkalinity"]), key="e_palk")
-                edit_m_alk = st.number_input("Ubah M-Alkalinity", 0.0, float(data_lama["M_Alkalinity"]), key="e_malk")
+                e1, e2, e3 = st.columns(3)
+                with e1:
+                    edit_ph = st.number_input("Koreksi pH", min_value=0.0, max_value=14.0,
+                                               value=float(data_lama["pH"]), step=0.01, key="e_ph")
+                    edit_conduct = st.number_input("Koreksi Conductivity", min_value=0,
+                                                    value=int(data_lama["Conduct"]), key="e_cond")
+                    edit_tds = st.number_input("Koreksi TDS", min_value=0,
+                                                value=int(data_lama["TDS"]), key="e_tds")
+                    edit_turb = st.number_input("Koreksi Turbidity", min_value=0.0,
+                                                 value=float(data_lama["Turbidity"]), key="e_turb")
+                with e2:
+                    edit_hard = st.number_input("Koreksi Tot. Hardness", min_value=0.0,
+                                                 value=float(data_lama["Tot_Hardness"]), key="e_hard")
+                    edit_m_alk = st.number_input("Koreksi M-Alkalinity", min_value=0.0,
+                                                  value=float(data_lama["M_Alkalinity"]), key="e_malk")
+                    edit_silica = st.number_input("Koreksi Silica", min_value=0.0,
+                                                   value=float(data_lama["Silica"]), key="e_sil")
+                    edit_chlor = st.number_input("Koreksi Chloride", min_value=0.0,
+                                                  value=float(data_lama["Chloride"]), key="e_chlor")
+                with e3:
+                    edit_iron = st.number_input("Koreksi Iron", min_value=0.0,
+                                                 value=float(data_lama["Iron"]), format="%.3f", key="e_iron")
+                    edit_phos = st.number_input("Koreksi O-Phosphate", min_value=0.0,
+                                                 value=float(data_lama["O_Phosphate"]), key="e_phos")
+                    edit_sulfit = st.number_input("Koreksi Sulfit", min_value=0.0,
+                                                   value=float(data_lama["Sulfit"]), key="e_sulf")
+                    edit_lsi = st.number_input("Koreksi LSI", value=float(data_lama["LSI"]),
+                                                step=0.01, key="e_lsi")
 
-            with e3:
-                edit_silica = st.number_input("Ubah Silica", 0.0, float(data_lama["Silica"]), key="e_sil")
-                edit_cyc_sil = st.number_input("Ubah Cycle Silika", 0.0, float(data_lama["Cycle_Silika"] if pd.notna(data_lama["Cycle_Silika"]) else 0.0), key="e_csil")
-                edit_chlor = st.number_input("Ubah Chloride", 0.0, float(data_lama["Chloride"]), key="e_chlor")
-                edit_cyc_chl = st.number_input("Ubah Cycle Chloride", 0.0, float(data_lama["Cycle_Chloride"] if pd.notna(data_lama["Cycle_Chloride"]) else 0.0), key="e_cchlor")
-                edit_iron = st.number_input("Ubah Iron", 0.0, float(data_lama["Iron"]), format="%.3f", key="e_iron")
-                edit_phos = st.number_input("Ubah O-Phosphate", 0.0, float(data_lama["O_Phosphate"]), key="e_phos")
+                btn_col1, btn_col2, _ = st.columns(3)
+                with btn_col1:
+                    if st.button("💾 Simpan Perubahan ke GitHub", type="primary"):
+                        with st.spinner("Memperbarui database master..."):
+                            idx = df_data[df_data["ID_Data"] == selected_id].index
+                            df_data.loc[idx, "pH"] = edit_ph
+                            df_data.loc[idx, "Conduct"] = edit_conduct
+                            df_data.loc[idx, "TDS"] = edit_tds
+                            df_data.loc[idx, "Turbidity"] = edit_turb
+                            df_data.loc[idx, "Tot_Hardness"] = edit_hard
+                            df_data.loc[idx, "M_Alkalinity"] = edit_m_alk
+                            df_data.loc[idx, "Silica"] = edit_silica
+                            df_data.loc[idx, "Chloride"] = edit_chlor
+                            df_data.loc[idx, "Iron"] = edit_iron
+                            df_data.loc[idx, "O_Phosphate"] = edit_phos
+                            df_data.loc[idx, "Sulfit"] = edit_sulfit
+                            df_data.loc[idx, "LSI"] = edit_lsi
 
-            # Tombol aksi
-            btn_col1, btn_col2, _ = st.columns(3)
-            with btn_col1:
-                if st.button("💾 Simpan Perubahan ke GitHub", type="primary"):
-                    with st.spinner("Memperbarui file Excel di GitHub..."):
-                        idx = df_data[df_data["ID_Data"] == selected_id].index[0]
-                        df_data.at[idx, "pH"] = edit_ph
-                        df_data.at[idx, "Conduct"] = edit_conduct
-                        df_data.at[idx, "Turbidity"] = edit_turb
-                        df_data.at[idx, "LSI"] = edit_lsi
-                        df_data.at[idx, "Tot_Hardness"] = edit_hard
-                        df_data.at[idx, "Cycle_Hard"] = edit_cyc_hard if edit_cyc_hard > 0 else None
-                        df_data.at[idx, "P_Alkalinity"] = edit_p_alk
-                        df_data.at[idx, "M_Alkalinity"] = edit_m_alk
-                        df_data.at[idx, "Silica"] = edit_silica
-                        df_data.at[idx, "Cycle_Silika"] = edit_cyc_sil if edit_cyc_sil > 0 else None
-                        df_data.at[idx, "Chloride"] = edit_chlor
-                        df_data.at[idx, "Cycle_Chloride"] = edit_cyc_chl if edit_cyc_chl > 0 else None
-                        df_data.at[idx, "Iron"] = edit_iron
-                        df_data.at[idx, "O_Phosphate"] = edit_phos
-
-                        if save_data_to_github(df_data):
-                            st.success("👍 File Excel di GitHub sukses diperbarui!")
-                            st.cache_data.clear()
-                            st.rerun()
-
-            with btn_col2:
-                if st.button("🗑️ Hapus Baris Ini dari GitHub", type="secondary"):
-                    with st.spinner("Menghapus baris dari Excel GitHub..."):
-                        df_filtered = df_data[df_data["ID_Data"] != selected_id]
-                        if save_data_to_github(df_filtered):
-                            st.warning("🗑️ Baris data telah terhapus dari file Excel GitHub.")
-                            st.cache_data.clear()
-                            st.rerun()
+                            if save_data_to_github(df_data):
+                                st.success("👍 Database master di GitHub sukses diperbarui!")
+                                st.cache_data.clear()
+                                st.rerun()
+                with btn_col2:
+                    if st.button("🗑️ Hapus Baris Ini dari GitHub", type="secondary"):
+                        with st.spinner("Menghapus baris..."):
+                            df_after_delete = df_data[df_data["ID_Data"] != selected_id]
+                            if save_data_to_github(df_after_delete):
+                                st.warning("🗑️ Baris data telah terhapus dari file Excel GitHub.")
+                                st.cache_data.clear()
+                                st.rerun()
