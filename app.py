@@ -168,16 +168,6 @@ else:
             st.subheader("📋 Ringkasan Parameter Kritis Hari Ini")
             
             last_row = df_data.iloc[-1]
-
-    # --- TAB 2: DASHBOARD & SHARE LINK ---
-    with tab_dash:
-        if df_data.empty:
-            st.info("Belum ada data di database.xlsx GitHub lu bro. Silakan isi form input dulu!")
-        else:
-            df_data = df_data.sort_values(by="Tanggal")
-            st.subheader("📋 Ringkasan Parameter Kritis Hari Ini")
-            
-            last_row = df_data.iloc[-1]
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("pH Terakhir", f"{last_row['pH']}")
             k2.metric("Conductivity", f"{int(last_row['Conduct'])} µS/cm")
