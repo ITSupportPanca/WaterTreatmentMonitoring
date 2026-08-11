@@ -247,7 +247,7 @@ st.divider()
 st.subheader("🔗 Bagikan Dashboard ini ke Orang Lain")
 if st.button("Generate Link Bagikan", type="primary"):
     unique_id = last_row["ID_Data"]
-    base_url = "http://localhost:8501"  # ganti dengan URL Streamlit Cloud asli
+    base_url = "https://pkr-wt.streamlit.app/"  # ganti dengan URL Streamlit Cloud asli
     share_url = f"{base_url}/?id={unique_id}"
     st.success("🎉 Link Berhasil Dibuat!")
     st.code(share_url, language="text")
